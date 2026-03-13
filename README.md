@@ -29,32 +29,140 @@ sudo insmod mqnic.ko
 ```
 ## IP configuration
 ```bash
-sudo ip addr add 192.168.1.100/24 dev enp5s0
+sudo ip link set enp1s0np0 up
+sudo ip addr add 192.168.1.128/24 dev enp1s0np0
+```
+ Desactivate IPv6
+ ```bash
+sysctl -w net.ipv6.conf.enp1s0np0.disable_ipv6=1
 ```
 
 ### namespace
+Creathe a namespace for nic
 ```bash
-# Crear namespace para la FPGA
-sudo ip netns add fpga-ns
-
-# Mover interfaz FPGA al namespace
-sudo ip link set enp1s0np0 netns fpga-ns
-
-# Configurar IP en el namespace
-sudo ip netns exec fpga-ns ip addr add 192.168.1.128/24 dev enp1s0np0
-sudo ip netns exec fpga-ns ip link set enp1s0np0 up
-
-# Ahora ARP desde el namespace
-sudo ip netns exec fpga-ns arping -I enp1s0np0 192.168.1.100
-
-# Abrir una shell bash dentro del namespace
-sudo ip netns exec fpga-ns bash
-
-# Deshabilitar IPv6 para esta interfaz
-sysctl -w net.ipv6.conf.enp1s0np0.disable_ipv6=1
+sudo ip netns add ns-nic
+sudo ip netns list
 ```
-### Arp test
+This creates and verify a new network namespace called ns-nic.
+Make the namespace persistent with services.
 ```bash
-sudo arping -I enp5s0 192.168.1.128
+sudo nano /etc/systemd/system/network-namespace@.service
+```
+paste
+```bash
+[Unit]
+Description=Network namespace %I
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/ip netns add %I
+ExecStop=/bin/ip netns del %I
+
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo nano /etc/systemd/system/move-enp5s0-to-ns.service
+```
+paste
+```bash
+[Unit]
+Description=Move enp5s0 to ns-nic namespace
+Requires=network-namespace@ns-nic.service
+After=network-namespace@ns-nic.service
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/ip link set enp5s0 netns ns-nic
+ExecStart=/bin/ip -n ns-nic link set lo up
+ExecStart=/bin/ip -n ns-nic link set enp5s0 up
+
+# Disable IPv6 for the interface in the namespace
+ExecStart=/bin/ip -n ns-nic netns exec sysctl -w net.ipv6.conf.enp5s0.disable_ipv6=1
+
+# Add your IP configuration here (IPv4 only now)
+ExecStart=/bin/ip -n ns-nic addr add 192.168.1.100/24 dev enp5s0
+ExecStart=/bin/ip -n ns-nic route add default via 192.168.1.1
+
+[Install]
+WantedBy=multi-user.target
+```
+run services
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable network-namespace@ns-nic.service
+sudo systemctl enable move-enp5s0-to-ns.service
+sudo systemctl start network-namespace@ns-nic.service
+sudo systemctl start move-enp5s0-to-nicns.service
+```
+enter in the namespace
+```bash
+sudo ip netns exec nicns bash
+```
+ Desactivate IPv6
+ ```bash
+sysctl -w net.ipv6.conf.enp5s0.disable_ipv6=1
+```
+### Arp request test
+On the server
+```bash
 sudo arping -I enp1s0np0 192.168.1.100
+```
+On the namespaced 
+```bash
+sudo ip netns exec nicns bash
+sudo arping -I enp5s0 192.168.1.128
+```
+
+## Remove Ipv6 address with file
+Edit the sysctl configuration file
+```bash
+sudo nano /etc/sysctl.conf
+```
+Add lines to the end of the file
+```bash
+net.ipv6.conf.[interface].disable_ipv6 = 1
+```
+Save the file and apply the changes
+```bash
+sudo sysctl -p
+```
+
+## Set MTU 
+```bash
+sudo ip link set mtu 9000 dev enp1s0np0
+```
+On namespace
+```bash
+sudo ip netns exec nicns bash
+sudo ip link set mtu 9000 dev enp5s0
+```
+
+## Tests
+### Ping
+```bash
+ping 192.168.1.128
+ping 192.168.1.100
+```
+### iperf
+On the server
+```bash
+iperf3 -s
+```
+On the namespace (client)
+```bash
+iperf3 -c 192.168.1.128
+```
+### PTP
+On the server
+```bash
+sudo ptp4l -i enp1s0np0 --masterOnly=1 -m --logSyncInterval=-3
+```
+On the namespace (client)
+```bash
+sudo ptp4l -i enp5s0 --slaveOnly=1 -m
 ```
