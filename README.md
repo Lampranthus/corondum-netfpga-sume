@@ -177,7 +177,7 @@ sudo ptp4l -i enp5s0 --slaveOnly=1 -m
 ### sockperf
 server
 ```bash
-server -i 192.168.1.128 -p 1234 -m 8192
+sockperf server -i 192.168.1.128 -p 1234 -m 8192
 ```
 client
 ```bash
