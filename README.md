@@ -107,6 +107,14 @@ sudo ip netns exec nicns bash
  ```bash
 sysctl -w net.ipv6.conf.enp5s0.disable_ipv6=1
 ```
+Nic configuration
+```bash
+sudo ethtool -C enp5s0 rx-usecs 0
+```
+See nic interruptions time
+```bash
+sudo ethtool -c enp5s0
+```
 ### Arp request test
 On the server
 ```bash
@@ -165,4 +173,13 @@ sudo ptp4l -i enp1s0np0 --masterOnly=1 -m --logSyncInterval=-3
 On the namespace (client)
 ```bash
 sudo ptp4l -i enp5s0 --slaveOnly=1 -m
+```
+### sockperf
+server
+```bash
+server -i 192.168.1.128 -p 1234 -m 8192
+```
+client
+```bash
+sockperf pp -i 192.168.1.128 -p 1234 -n 100000 -m 64 --histogram 1:0:100
 ```
