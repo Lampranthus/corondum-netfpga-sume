@@ -28,126 +28,72 @@ Once the kernel module is built, load it with insmod inside /modules/mqnic/
 sudo insmod mqnic.ko
 ```
 ## IP configuration
-```bash
-sudo ip link set enp1s0np0 up
-sudo ip addr add 192.168.1.128/24 dev enp1s0np0
-```
- Desactivate IPv6
- ```bash
-sysctl -w net.ipv6.conf.enp1s0np0.disable_ipv6=1
-```
-
-### namespace
-Creathe a namespace for nic
-```bash
-sudo ip netns add ns-nic
-sudo ip netns list
-```
-This creates and verify a new network namespace called ns-nic.
-Make the namespace persistent with services.
-```bash
-sudo nano /etc/systemd/system/network-namespace@.service
-```
-paste
-```bash
-[Unit]
-Description=Network namespace %I
-Before=network.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/ip netns add %I
-ExecStop=/bin/ip netns del %I
-
-[Install]
-WantedBy=multi-user.target
-```
-```bash
-sudo nano /etc/systemd/system/move-enp5s0-to-ns.service
-```
-paste
-```bash
-[Unit]
-Description=Move enp5s0 to ns-nic namespace
-Requires=network-namespace@ns-nic.service
-After=network-namespace@ns-nic.service
-Before=network.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/ip link set enp5s0 netns ns-nic
-ExecStart=/bin/ip -n ns-nic link set lo up
-ExecStart=/bin/ip -n ns-nic link set enp5s0 up
-
-# Disable IPv6 for the interface in the namespace
-ExecStart=/bin/ip -n ns-nic netns exec sysctl -w net.ipv6.conf.enp5s0.disable_ipv6=1
-
-# Add your IP configuration here (IPv4 only now)
-ExecStart=/bin/ip -n ns-nic addr add 192.168.1.100/24 dev enp5s0
-ExecStart=/bin/ip -n ns-nic route add default via 192.168.1.1
-
-[Install]
-WantedBy=multi-user.target
-```
-run services
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable network-namespace@ns-nic.service
-sudo systemctl enable move-enp5s0-to-ns.service
-sudo systemctl start network-namespace@ns-nic.service
-sudo systemctl start move-enp5s0-to-nicns.service
-```
-enter in the namespace
-```bash
-sudo ip netns exec nicns bash
-```
- Desactivate IPv6
- ```bash
-sysctl -w net.ipv6.conf.enp5s0.disable_ipv6=1
-```
-Nic configuration
-```bash
-sudo ethtool -C enp5s0 rx-usecs 0
-```
-See nic interruptions time
-```bash
-sudo ethtool -c enp5s0
-```
-### Arp request test
-On the server
-```bash
-sudo arping -I enp1s0np0 192.168.1.100
-```
-On the namespaced 
-```bash
-sudo ip netns exec nicns bash
-sudo arping -I enp5s0 192.168.1.128
-```
-
 ## Remove Ipv6 address with file
 Edit the sysctl configuration file
 ```bash
 sudo nano /etc/sysctl.conf
 ```
-Add lines to the end of the file
-```bash
-net.ipv6.conf.[interface].disable_ipv6 = 1
+ Paste
+ ```bash
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+
+net.core.rmem_max = 2147483647
+net.core.wmem_max = 2147483647
+net.core.netdev_max_backlog = 1000000
+net.core.optmem_max = 4194304
+
+net.ipv4.tcp_rmem = 4096 87380 2147483647
+net.ipv4.tcp_wmem = 4096 65536 2147483647
+net.ipv4.udp_mem = 4194304 4194304 4194304
 ```
 Save the file and apply the changes
 ```bash
 sudo sysctl -p
 ```
-
-## Set MTU 
+NIC configuration
 ```bash
-sudo ip link set mtu 9000 dev enp1s0np0
-```
-On namespace
-```bash
-sudo ip netns exec nicns bash
+sudo ip link set enp5s0 up
+sudo ip addr add 192.168.1.100/24 dev enp5s0
 sudo ip link set mtu 9000 dev enp5s0
+sudo ethtool -C enp5s0 rx-usecs 0
+sudo sysctl -p
+```
+See nic interruptions time
+```bash
+sudo ethtool -c enp5s0
+```
+### namespace
+Create a namespace for nic
+```bash
+sudo ip netns add corundum
+sudo ip netns list
+```
+This creates and verify a new network namespace called corundum.
+Move NIC to the namespace,
+```bash
+sudo ip link set enp1s0np0 netns corundum
+```
+enter in the namespace
+```bash
+sudo ip netns exec corundum bash
+```
+Corundum NIC configuration
+```bash
+sudo ip link set enp1s0np0 up
+sudo ip addr add 192.168.1.128/24 dev enp1s0np0
+sudo ip link set mtu 9000 dev enp1s0np0
+sudo sysctl -p
+```
+### Arp request test
+On the server
+```bash
+sudo arping -I enp1s0np0 192.168.1.128
+```
+On the namespaced 
+```bash
+sudo ip netns exec corundum bash
+sudo arping -I enp5s0 192.168.1.100
 ```
 
 ## Tests
@@ -161,25 +107,31 @@ On the server
 ```bash
 iperf3 -s
 ```
-On the namespace (client)
+On the client
 ```bash
 iperf3 -c 192.168.1.128
+iperf3 -c 192.168.1.100
 ```
-### PTP
+### PTP test
+Check de firewall if dont run.
 On the server
 ```bash
+sudo ptp4l -i enp5s0 --masterOnly=1 -m --logSyncInterval=-3
 sudo ptp4l -i enp1s0np0 --masterOnly=1 -m --logSyncInterval=-3
 ```
-On the namespace (client)
+On the client
 ```bash
+sudo ptp4l -i enp1s0np0 --slaveOnly=1 -m
 sudo ptp4l -i enp5s0 --slaveOnly=1 -m
 ```
 ### sockperf
 server
 ```bash
 sockperf server -i 192.168.1.128 -p 1234 -m 8192
+sockperf server -i 192.168.1.100 -p 1234 -m 8192
 ```
 client
 ```bash
 sockperf pp -i 192.168.1.128 -p 1234 -n 100000 -m 64 --histogram 1:0:100
+sockperf pp -i 192.168.1.100 -p 1234 -n 100000 -m 64 --histogram 1:0:100
 ```
